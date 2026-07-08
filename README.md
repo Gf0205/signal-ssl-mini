@@ -76,14 +76,51 @@ For the first external-validity step, use RadioML2016.10A rather than the much
 larger RadioML2018.01A. RadioML2016.10A already uses `[N, 2, 128]` IQ samples,
 so it matches the current Tiny IQ Transformer setup.
 
-Download the official `RML2016.10a_dict.pkl` file manually and place it under
-`data/`. Do not commit it to Git.
+The old DeepSig `opendata.deepsig.io` download endpoint can fail because of
+certificate/server issues. Prefer a trusted mirror such as Kaggle or Zenodo, and
+record the exact source used in your notes. Do not commit downloaded datasets to
+Git.
 
-Convert the four-class subset:
+Kaggle mirror workflow:
+
+```bash
+pip install kaggle
+mkdir -p ~/.kaggle
+# Upload kaggle.json to ~/.kaggle/kaggle.json first.
+chmod 600 ~/.kaggle/kaggle.json
+
+kaggle datasets download \
+  -d nolasthitnotomorrow/radioml2016-deepsigcom \
+  -p data/
+
+unzip data/radioml2016-deepsigcom.zip -d data/rml2016
+find data/rml2016 -name "*.pkl"
+```
+
+Before converting or training, inspect the pickle:
+
+```bash
+python inspect_radioml2016.py --input data/rml2016/RML2016.10a_dict.pkl
+```
+
+Expected pass signal:
+
+```text
+Target 4-class mapping check:
+  BPSK
+  QPSK
+  8PSK
+  QAM16
+Shape validation:
+  All arrays have shape [N, 2, 128].
+PASS: RadioML2016 pickle inspection completed.
+```
+
+Only after inspection passes, convert the four-class subset:
 
 ```bash
 python prepare_radioml2016.py \
-  --input data/RML2016.10a_dict.pkl \
+  --input data/rml2016/RML2016.10a_dict.pkl \
   --out data/radioml2016_4mods_views.npz \
   --normalize \
   --make-views \
