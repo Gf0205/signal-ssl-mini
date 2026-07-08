@@ -31,6 +31,9 @@ class ConsistencyIQPretrainer(nn.Module):
         num_layers: int = 2,
         num_heads: int = 4,
         dropout: float = 0.1,
+        projector: str = "identity",
+        projector_hidden_dim: int = 128,
+        projector_out_dim: int | None = None,
     ) -> None:
         super().__init__()
         self.backbone = TinyIQTransformerBackbone(
@@ -41,10 +44,24 @@ class ConsistencyIQPretrainer(nn.Module):
             num_heads=num_heads,
             dropout=dropout,
         )
+        if projector_out_dim is None:
+            projector_out_dim = hidden_dim
+        if projector == "identity":
+            self.projector = nn.Identity()
+        elif projector == "mlp":
+            self.projector = nn.Sequential(
+                nn.Linear(hidden_dim, projector_hidden_dim),
+                nn.GELU(),
+                nn.Linear(projector_hidden_dim, projector_out_dim),
+            )
+        else:
+            raise ValueError(f"Unknown projector: {projector}")
 
     def forward(self, x_a: torch.Tensor, x_b: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        z_a = self.backbone(x_a)
-        z_b = self.backbone(x_b)
+        h_a = self.backbone(x_a)
+        h_b = self.backbone(x_b)
+        z_a = self.projector(h_a)
+        z_b = self.projector(h_b)
         return z_a, z_b
 
 
@@ -204,6 +221,9 @@ def main() -> None:
     parser.add_argument("--variance-weight", type=float, default=1.0)
     parser.add_argument("--variance-target", type=float, default=0.2)
     parser.add_argument("--variance-eps", type=float, default=1e-4)
+    parser.add_argument("--projector", choices=["identity", "mlp"], default="identity")
+    parser.add_argument("--projector-hidden-dim", type=int, default=128)
+    parser.add_argument("--projector-out-dim", type=int, default=None)
     args = parser.parse_args()
 
     assert args.epochs > 0
@@ -214,6 +234,9 @@ def main() -> None:
     assert args.variance_weight >= 0
     assert args.variance_target > 0
     assert args.variance_eps > 0
+    assert args.projector_hidden_dim > 0
+    if args.projector_out_dim is not None:
+        assert args.projector_out_dim > 0
 
     set_seed(args.seed)
     device = resolve_device(args.device)
@@ -249,6 +272,9 @@ def main() -> None:
         hidden_dim=args.hidden_dim,
         num_layers=args.num_layers,
         num_heads=args.num_heads,
+        projector=args.projector,
+        projector_hidden_dim=args.projector_hidden_dim,
+        projector_out_dim=args.projector_out_dim,
     ).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -282,6 +308,10 @@ def main() -> None:
     print(f"View B device: {x_b.device}")
     print(f"z_a shape: {tuple(z_a.shape)}")
     print(f"z_b shape: {tuple(z_b.shape)}")
+    print(f"Projector: {args.projector}")
+    if args.projector == "mlp":
+        print(f"Projector hidden dim: {args.projector_hidden_dim}")
+        print(f"Projector out dim: {z_a.shape[1]}")
     print(f"Variance weight: {args.variance_weight}")
     print(f"Variance target std: {args.variance_target}")
     print(f"Initial consistency loss: {float(init_loss.item()):.6f}")
@@ -354,6 +384,9 @@ def main() -> None:
                 "num_heads": args.num_heads,
                 "objective": "representation_consistency",
                 "loss": "1_minus_cosine_similarity_plus_variance_regularization",
+                "projector": args.projector,
+                "projector_hidden_dim": args.projector_hidden_dim,
+                "projector_out_dim": z_a.shape[1],
                 "variance_weight": args.variance_weight,
                 "variance_target": args.variance_target,
                 "variance_eps": args.variance_eps,
