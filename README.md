@@ -17,6 +17,27 @@ classification.
 This repository intentionally stores code only. Generated datasets,
 checkpoints, plots, logs, and result CSV files are excluded by `.gitignore`.
 
+## v0.1 Research Baseline
+
+The current research focus is no longer just whether SSL helps AMC. The
+emerging question is how communication perturbations should be matched with
+self-supervised objectives.
+
+Current stage conclusions:
+
+- AWGN: raw noisy-view reconstruction is the strongest and most stable
+  objective tested so far.
+- Constant phase offset: useful only within a bounded strength; excessive phase
+  invariance can weaken AMC-discriminative structure.
+- CFO: raw reconstruction is mismatched, while simple representation
+  consistency avoids collapse only after variance regularization and gives
+  small gains.
+
+See `experiment_notes.md` for the full perturbation-objective summary table and
+the method evolution log. The next recommended stage is external validity:
+public AMC data or a more realistic signal chain, rather than adding more model
+tricks.
+
 ## Quick GPU Smoke Test
 
 ```bash

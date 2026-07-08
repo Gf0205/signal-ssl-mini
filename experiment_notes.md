@@ -229,6 +229,129 @@ Interpretation:
 - CFO may be better handled by representation-level consistency or contrastive
   objectives rather than raw IQ reconstruction.
 
+## CFO Representation Consistency
+
+To test whether CFO is better modeled at the representation level, a minimal
+two-view consistency objective was added:
+
+```text
+same base waveform
+  -> CFO/noise view A -> backbone -> z_a
+  -> CFO/noise view B -> backbone -> z_b
+
+loss = 1 - cosine(z_a, z_b)
+```
+
+### Pure Cosine Consistency
+
+Observation:
+
+- Validation cosine quickly approached 1.0.
+- Per-dimension representation standard deviation collapsed to around 0.001.
+- Downstream improvement was essentially absent.
+
+Representative seed-1 result:
+
+```text
+Scratch best acc:      0.4500
+Pure cosine best acc:  0.4517
+Delta:                 +0.0017
+```
+
+Interpretation:
+
+- Pure cosine consistency is not usable by itself.
+- It can satisfy the objective through collapsed or near-collapsed
+  representations.
+
+### Cosine + Variance Regularization
+
+To reduce collapse, a variance regularizer was added:
+
+```text
+loss = 1 - cosine(z_a, z_b) + lambda * variance_loss(z_a, z_b)
+```
+
+Multi-seed result on 20k CFO=0.01:
+
+```text
+Final:
+Scratch:              acc=0.4499 +/- 0.0080 | macro_f1=0.4465 +/- 0.0134
+Consistency+Var:      acc=0.4628 +/- 0.0145 | macro_f1=0.4547 +/- 0.0174
+Delta:                acc=+0.0129            | macro_f1=+0.0082
+
+Best-val:
+Scratch:              acc=0.4506 +/- 0.0075 | macro_f1=0.4477 +/- 0.0068
+Consistency+Var:      acc=0.4639 +/- 0.0119 | macro_f1=0.4642 +/- 0.0119
+Delta:                acc=+0.0133            | macro_f1=+0.0165
+```
+
+Interpretation:
+
+- Variance regularization mitigates collapse.
+- The downstream gain becomes stable across seeds, but remains small.
+- CFO representation-level consistency is more reasonable than raw
+  reconstruction, but this minimal objective is still weak.
+
+### Cosine + Variance + Projector
+
+A projection head was tested:
+
+```text
+backbone -> h
+projector -> z
+loss acts on z
+downstream finetuning uses h
+```
+
+This tests whether direct constraints on the backbone CLS representation harm
+the downstream AMC space.
+
+Multi-seed result on 20k CFO=0.01:
+
+```text
+Final:
+Scratch:                 acc=0.4499 +/- 0.0080 | macro_f1=0.4465 +/- 0.0134
+Consistency+Var+Proj:    acc=0.4511 +/- 0.0261 | macro_f1=0.4513 +/- 0.0244
+Delta:                   acc=+0.0012            | macro_f1=+0.0048
+
+Best-val:
+Scratch:                 acc=0.4506 +/- 0.0075 | macro_f1=0.4477 +/- 0.0068
+Consistency+Var+Proj:    acc=0.4467 +/- 0.0259 | macro_f1=0.4520 +/- 0.0264
+Delta:                   acc=-0.0039            | macro_f1=+0.0044
+```
+
+Interpretation:
+
+- The projector did not improve downstream transfer.
+- It increased seed variance and may have solved the consistency task mostly in
+  projection space without improving the backbone.
+- This negative result suggests that CFO's difficulty is not simply caused by
+  directly constraining the backbone CLS representation.
+
+## Perturbation-Objective Summary
+
+| Perturbation | SSL objective | Result | Current judgment |
+| --- | --- | --- | --- |
+| AWGN | Raw cross-view reconstruction | Strong, stable positive gain | Best current mainline; high objective-perturbation match |
+| Constant phase | Raw cross-view reconstruction | Mild phase helped at 20k, but phase10 was weaker than AWGN-only at 50k | Bounded invariance; phase can also carry discriminative structure |
+| CFO | Raw cross-view reconstruction | High MSE, unstable or weak downstream gain | Raw pointwise reconstruction is not natural for time-varying phase drift |
+| CFO | Pure cosine consistency | Near collapse, almost no downstream gain | Not usable without anti-collapse terms |
+| CFO | Cosine + variance | Stable but small positive gain | Anti-collapse works; objective remains limited |
+| CFO | Cosine + variance + projector | No improvement and higher variance | Projector did not solve the core CFO objective mismatch |
+
+## Method Evolution
+
+```text
+masked raw-IQ reconstruction
+  -> denoising noisy-to-clean
+  -> noisy-to-noisy multi-view reconstruction
+  -> bounded phase perturbation
+  -> CFO raw-reconstruction failure
+  -> anti-collapse representation consistency
+  -> projector negative result
+```
+
 ## Current Conclusions
 
 ### 1. AWGN Multi-View Is the Strongest Current Mainline
@@ -249,6 +372,16 @@ CFO introduces time-varying phase drift. It changes the view relation more
 strongly than AWGN or constant phase rotation and makes raw reconstruction a
 less natural SSL objective.
 
+### 4. CFO Representation Consistency Helps Only Modestly So Far
+
+Pure cosine consistency collapses. Adding variance regularization prevents
+collapse and yields a stable but small downstream gain. Adding a projector does
+not improve transfer and increases variance.
+
+This suggests that CFO probably needs a more structured objective than simple
+cosine consistency, such as covariance decorrelation, predictor-based SSL, or
+communication-aware features that model phase drift more explicitly.
+
 ## Working Thesis
 
 More augmentation is not automatically better. For communication IQ signals,
@@ -262,7 +395,8 @@ Current evidence suggests:
 ```text
 AWGN             -> suitable for raw cross-view reconstruction
 constant phase   -> useful only in controlled strength and not always beneficial
-CFO              -> likely needs representation-level consistency, not raw reconstruction
+CFO              -> raw reconstruction is mismatched; simple representation
+                    consistency is better but still weak
 ```
 
 ## Recommended Next Steps
@@ -271,9 +405,9 @@ Short term:
 
 1. Keep AWGN NoisyA-to-NoisyB as the main baseline.
 2. Do not continue broad phase/CFO sweeps immediately.
-3. Decide between:
-   - N=100k AWGN-only confirmation, or
-   - a first contrastive / representation-consistency objective for CFO.
+3. Do not keep optimizing projector variants without a clearer objective reason.
+4. Before more runs, organize the current evidence into a compact result table
+   and decide which claim the next experiment should test.
 
 Research direction:
 
@@ -283,3 +417,12 @@ Research direction:
 Which communication perturbations should be reconstructed, and which should
 be made invariant only at the representation level?
 ```
+
+Possible next experiment families, after pausing to review:
+
+- Confirm AWGN NoisyA-to-NoisyB at larger scale, if the goal is to strengthen
+  the main positive result.
+- Design a more structured CFO objective, if the goal is to study objective
+  matching for time-varying phase drift.
+- Add a second downstream robustness evaluation, if the goal is to test whether
+  learned representations transfer beyond the same AMC setup.
