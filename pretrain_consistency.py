@@ -48,10 +48,36 @@ class ConsistencyIQPretrainer(nn.Module):
         return z_a, z_b
 
 
-def consistency_loss(z_a: torch.Tensor, z_b: torch.Tensor) -> torch.Tensor:
+def invariance_loss(z_a: torch.Tensor, z_b: torch.Tensor) -> torch.Tensor:
     assert z_a.shape == z_b.shape
     cosine = torch.nn.functional.cosine_similarity(z_a, z_b, dim=1)
     return 1.0 - cosine.mean()
+
+
+def variance_loss(z_a: torch.Tensor, z_b: torch.Tensor, target_std: float, eps: float) -> torch.Tensor:
+    assert z_a.shape == z_b.shape
+    std_a = torch.sqrt(z_a.var(dim=0, unbiased=False) + eps)
+    std_b = torch.sqrt(z_b.var(dim=0, unbiased=False) + eps)
+    loss_a = torch.relu(target_std - std_a).mean()
+    loss_b = torch.relu(target_std - std_b).mean()
+    return 0.5 * (loss_a + loss_b)
+
+
+def consistency_loss(
+    z_a: torch.Tensor,
+    z_b: torch.Tensor,
+    variance_weight: float,
+    variance_target: float,
+    variance_eps: float,
+) -> tuple[torch.Tensor, dict[str, float]]:
+    inv = invariance_loss(z_a, z_b)
+    var = variance_loss(z_a, z_b, target_std=variance_target, eps=variance_eps)
+    total = inv + variance_weight * var
+    return total, {
+        "inv_loss": float(inv.detach().item()),
+        "var_loss": float(var.detach().item()),
+        "total_loss": float(total.detach().item()),
+    }
 
 
 @torch.no_grad()
@@ -82,6 +108,9 @@ def train_one_epoch(
     loader: DataLoader,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
+    variance_weight: float,
+    variance_target: float,
+    variance_eps: float,
 ) -> tuple[float, dict[str, float]]:
     model.train()
     total_loss = 0.0
@@ -94,14 +123,22 @@ def train_one_epoch(
 
         optimizer.zero_grad(set_to_none=True)
         z_a, z_b = model(x_a, x_b)
-        loss = consistency_loss(z_a, z_b)
+        loss, loss_stats = consistency_loss(
+            z_a,
+            z_b,
+            variance_weight=variance_weight,
+            variance_target=variance_target,
+            variance_eps=variance_eps,
+        )
         loss.backward()
         optimizer.step()
 
         batch_size = x_a.shape[0]
         total_loss += float(loss.item()) * batch_size
         total_samples += batch_size
-        add_weighted_stats(total_stats, representation_stats(z_a.detach(), z_b.detach()), batch_size)
+        batch_stats = representation_stats(z_a.detach(), z_b.detach())
+        batch_stats.update(loss_stats)
+        add_weighted_stats(total_stats, batch_stats, batch_size)
 
     return total_loss / total_samples, finalize_stats(total_stats, total_samples)
 
@@ -111,6 +148,9 @@ def evaluate_consistency(
     model: nn.Module,
     loader: DataLoader,
     device: torch.device,
+    variance_weight: float,
+    variance_target: float,
+    variance_eps: float,
 ) -> tuple[float, dict[str, float]]:
     model.eval()
     total_loss = 0.0
@@ -121,12 +161,20 @@ def evaluate_consistency(
         x_a = x_a.to(device)
         x_b = x_b.to(device)
         z_a, z_b = model(x_a, x_b)
-        loss = consistency_loss(z_a, z_b)
+        loss, loss_stats = consistency_loss(
+            z_a,
+            z_b,
+            variance_weight=variance_weight,
+            variance_target=variance_target,
+            variance_eps=variance_eps,
+        )
 
         batch_size = x_a.shape[0]
         total_loss += float(loss.item()) * batch_size
         total_samples += batch_size
-        add_weighted_stats(total_stats, representation_stats(z_a, z_b), batch_size)
+        batch_stats = representation_stats(z_a, z_b)
+        batch_stats.update(loss_stats)
+        add_weighted_stats(total_stats, batch_stats, batch_size)
 
     return total_loss / total_samples, finalize_stats(total_stats, total_samples)
 
@@ -153,6 +201,9 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=Path("checkpoints/consistency_backbone.pt"))
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
     parser.add_argument("--collapse-std-threshold", type=float, default=1e-3)
+    parser.add_argument("--variance-weight", type=float, default=1.0)
+    parser.add_argument("--variance-target", type=float, default=0.2)
+    parser.add_argument("--variance-eps", type=float, default=1e-4)
     args = parser.parse_args()
 
     assert args.epochs > 0
@@ -160,6 +211,9 @@ def main() -> None:
     assert args.lr > 0
     assert args.weight_decay >= 0
     assert args.collapse_std_threshold > 0
+    assert args.variance_weight >= 0
+    assert args.variance_target > 0
+    assert args.variance_eps > 0
 
     set_seed(args.seed)
     device = resolve_device(args.device)
@@ -207,8 +261,15 @@ def main() -> None:
     x_b = x_b.to(device)
     with torch.no_grad():
         z_a, z_b = model(x_a, x_b)
-        init_loss = consistency_loss(z_a, z_b)
+        init_loss, init_loss_stats = consistency_loss(
+            z_a,
+            z_b,
+            variance_weight=args.variance_weight,
+            variance_target=args.variance_target,
+            variance_eps=args.variance_eps,
+        )
         init_stats = representation_stats(z_a, z_b)
+        init_stats.update(init_loss_stats)
 
     print("=== Representation consistency pretraining setup ===")
     print_device_report(device)
@@ -221,9 +282,13 @@ def main() -> None:
     print(f"View B device: {x_b.device}")
     print(f"z_a shape: {tuple(z_a.shape)}")
     print(f"z_b shape: {tuple(z_b.shape)}")
+    print(f"Variance weight: {args.variance_weight}")
+    print(f"Variance target std: {args.variance_target}")
     print(f"Initial consistency loss: {float(init_loss.item()):.6f}")
     print(
         "Initial stats | "
+        f"inv_loss={init_stats['inv_loss']:.6f} | "
+        f"var_loss={init_stats['var_loss']:.6f} | "
         f"cos={init_stats['cosine']:.4f} | "
         f"z_std={init_stats['z_std']:.6f} | "
         f"dim_std_mean={init_stats['z_dim_std_mean']:.6f} | "
@@ -245,18 +310,30 @@ def main() -> None:
             loader=train_loader,
             optimizer=optimizer,
             device=device,
+            variance_weight=args.variance_weight,
+            variance_target=args.variance_target,
+            variance_eps=args.variance_eps,
         )
         val_loss, val_stats = evaluate_consistency(
             model=model,
             loader=val_loader,
             device=device,
+            variance_weight=args.variance_weight,
+            variance_target=args.variance_target,
+            variance_eps=args.variance_eps,
         )
         print(
             f"Epoch {epoch:02d}/{args.epochs} | "
-            f"train_loss={train_loss:.6f} | train_cos={train_stats['cosine']:.4f} | "
+            f"train_loss={train_loss:.6f} | "
+            f"train_inv={train_stats['inv_loss']:.6f} | "
+            f"train_var={train_stats['var_loss']:.6f} | "
+            f"train_cos={train_stats['cosine']:.4f} | "
             f"train_z_std={train_stats['z_std']:.6f} | "
             f"train_dim_std={train_stats['z_dim_std_mean']:.6f} | "
-            f"val_loss={val_loss:.6f} | val_cos={val_stats['cosine']:.4f} | "
+            f"val_loss={val_loss:.6f} | "
+            f"val_inv={val_stats['inv_loss']:.6f} | "
+            f"val_var={val_stats['var_loss']:.6f} | "
+            f"val_cos={val_stats['cosine']:.4f} | "
             f"val_z_std={val_stats['z_std']:.6f} | "
             f"val_dim_std={val_stats['z_dim_std_mean']:.6f} | "
             f"val_dim_min={val_stats['z_dim_std_min']:.6f} | "
@@ -276,7 +353,10 @@ def main() -> None:
                 "num_layers": args.num_layers,
                 "num_heads": args.num_heads,
                 "objective": "representation_consistency",
-                "loss": "1_minus_cosine_similarity",
+                "loss": "1_minus_cosine_similarity_plus_variance_regularization",
+                "variance_weight": args.variance_weight,
+                "variance_target": args.variance_target,
+                "variance_eps": args.variance_eps,
             },
         },
         args.out,
