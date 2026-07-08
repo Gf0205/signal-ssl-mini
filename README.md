@@ -69,3 +69,39 @@ This keeps the model fixed and only increases the synthetic dataset size.
 ```bash
 python run_scale_noisy2noisy.py --run-id n100k_seed1_e30 --samples-per-class 25000 --seed 1 --label-ratio 0.1 --ssl-epochs 30 --finetune-epochs 30 --ssl-batch-size 256 --batch-size 256 --device cuda
 ```
+
+## Public Dataset First Check
+
+For the first external-validity step, use RadioML2016.10A rather than the much
+larger RadioML2018.01A. RadioML2016.10A already uses `[N, 2, 128]` IQ samples,
+so it matches the current Tiny IQ Transformer setup.
+
+Download the official `RML2016.10a_dict.pkl` file manually and place it under
+`data/`. Do not commit it to Git.
+
+Convert the four-class subset:
+
+```bash
+python prepare_radioml2016.py \
+  --input data/RML2016.10a_dict.pkl \
+  --out data/radioml2016_4mods_views.npz \
+  --normalize \
+  --make-views \
+  --view-snr-min 10 \
+  --view-snr-max 20
+```
+
+Then run the normal dataset sanity check:
+
+```bash
+python dataset.py --data data/radioml2016_4mods_views.npz --batch-size 64
+```
+
+The converted file contains:
+
+- `x`, `y`, `snr` for downstream AMC.
+- `x_noisy_a`, `x_noisy_b`, `snr_a`, `snr_b` for reusing the NoisyA-to-NoisyB
+  pretraining script.
+
+Note: RadioML2016.10A is distributed as a Python pickle. Only load pickle files
+from a trusted source.
