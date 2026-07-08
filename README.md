@@ -1,0 +1,42 @@
+# signal-ssl-mini
+
+Minimal PyTorch experiments for self-supervised IQ signal pretraining and AMC
+classification.
+
+## Scope
+
+- Four modulation classes: BPSK, QPSK, 8PSK, 16QAM
+- Synthetic IQ data with shape `[N, 2, 128]`
+- Tiny IQ Transformer backbone
+- Scratch AMC baseline
+- Masked reconstruction SSL
+- Denoising pretraining
+- NoisyA-to-NoisyB multi-view pretraining
+- Phase and CFO augmentation probes
+
+This repository intentionally stores code only. Generated datasets,
+checkpoints, plots, logs, and result CSV files are excluded by `.gitignore`.
+
+## Quick GPU Smoke Test
+
+```bash
+python data.py --samples-per-class 16 --length 128 --out data/smoke_gpu_views.npz --plot plots/smoke_gpu.png
+python gpu_smoke.py --data data/smoke_gpu_views.npz --batch-size 32 --device cuda
+```
+
+Expected pass signal:
+
+```text
+CUDA available: True
+Classifier batch device: x=cuda:0
+Noisy pair batch device: a=cuda:0
+PASS: GPU smoke test completed.
+```
+
+## Core Noisy-to-Noisy Check
+
+```bash
+python data.py --samples-per-class 5000 --length 128 --out data/iq_4mods_awgn_views_n20000.npz --plot plots/iq_debug.png
+python pretrain_noisy2noisy.py --data data/iq_4mods_awgn_views_n20000.npz --epochs 10 --seed 1 --device cuda --out checkpoints/noisy2noisy_backbone_seed1.pt
+python compare_noisy2noisy_seeds.py --data data/iq_4mods_awgn_views_n20000.npz --seeds 1 --label-ratio 0.1 --epochs 10 --device cuda --checkpoint-dir checkpoints --checkpoint-prefix noisy2noisy_backbone_seed --out results/noisy2noisy_seed1.csv --log-file logs/noisy2noisy_seed1.txt
+```
