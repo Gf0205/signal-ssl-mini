@@ -40,3 +40,11 @@ python data.py --samples-per-class 5000 --length 128 --out data/iq_4mods_awgn_vi
 python pretrain_noisy2noisy.py --data data/iq_4mods_awgn_views_n20000.npz --epochs 10 --seed 1 --device cuda --out checkpoints/noisy2noisy_backbone_seed1.pt
 python compare_noisy2noisy_seeds.py --data data/iq_4mods_awgn_views_n20000.npz --seeds 1 --label-ratio 0.1 --epochs 10 --device cuda --checkpoint-dir checkpoints --checkpoint-prefix noisy2noisy_backbone_seed --out results/noisy2noisy_seed1.csv --log-file logs/noisy2noisy_seed1.txt
 ```
+
+## First GPU Scale-Up
+
+This keeps the model fixed and only increases the synthetic dataset size.
+
+```bash
+python run_scale_noisy2noisy.py --run-id n100k_seed1_e30 --samples-per-class 25000 --seed 1 --label-ratio 0.1 --ssl-epochs 30 --finetune-epochs 30 --ssl-batch-size 256 --batch-size 256 --device cuda
+```
