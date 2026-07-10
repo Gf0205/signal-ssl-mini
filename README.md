@@ -140,5 +140,20 @@ The converted file contains:
 - `x_noisy_a`, `x_noisy_b`, `snr_a`, `snr_b` for reusing the NoisyA-to-NoisyB
   pretraining script.
 
+To diagnose whether extra synthetic AWGN causes a distribution mismatch on
+RadioML, generate an identity-view control with the same samples and ordering:
+
+```bash
+python prepare_radioml2016.py \
+  --input data/rml2016/RML2016.10a_dict.pkl \
+  --out data/radioml2016_4mods_identity_views.npz \
+  --normalize \
+  --make-views \
+  --view-mode identity
+```
+
+This control sets both pretraining views to the same received RadioML sample.
+It is a diagnostic autoencoding baseline, not the final self-supervised method.
+
 Note: RadioML2016.10A is distributed as a Python pickle. Only load pickle files
 from a trusted source.

@@ -88,6 +88,12 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--normalize", action="store_true")
     parser.add_argument("--make-views", action="store_true")
+    parser.add_argument(
+        "--view-mode",
+        choices=["awgn", "identity"],
+        default="awgn",
+        help="AWGN creates two added-noise views; identity pairs each received sample with itself.",
+    )
     parser.add_argument("--view-snr-min", type=float, default=10.0)
     parser.add_argument("--view-snr-max", type=float, default=20.0)
     args = parser.parse_args()
@@ -168,18 +174,25 @@ def main() -> None:
     }
 
     if args.make_views:
-        x_noisy_a, x_noisy_b, snr_a, snr_b = add_awgn_views(
-            x=x,
-            snr_min=args.view_snr_min,
-            snr_max=args.view_snr_max,
-            rng=rng,
-        )
+        if args.view_mode == "awgn":
+            x_noisy_a, x_noisy_b, snr_a, snr_b = add_awgn_views(
+                x=x,
+                snr_min=args.view_snr_min,
+                snr_max=args.view_snr_max,
+                rng=rng,
+            )
+        else:
+            x_noisy_a = x.copy()
+            x_noisy_b = x.copy()
+            snr_a = snr.copy()
+            snr_b = snr.copy()
         save_data.update(
             {
                 "x_noisy_a": x_noisy_a,
                 "x_noisy_b": x_noisy_b,
                 "snr_a": snr_a,
                 "snr_b": snr_b,
+                "view_mode": np.asarray(args.view_mode),
             }
         )
 
@@ -192,9 +205,13 @@ def main() -> None:
     print(f"y shape: {y.shape} dtype={y.dtype}")
     print(f"snr shape: {snr.shape} dtype={snr.dtype}")
     if args.make_views:
+        print(f"view mode: {args.view_mode}")
         print(f"x_noisy_a shape: {save_data['x_noisy_a'].shape}")
         print(f"x_noisy_b shape: {save_data['x_noisy_b'].shape}")
-        print(f"view SNR range: [{args.view_snr_min}, {args.view_snr_max}] dB")
+        if args.view_mode == "awgn":
+            print(f"added-noise view SNR range: [{args.view_snr_min}, {args.view_snr_max}] dB")
+        else:
+            print(f"source SNR range: [{float(snr.min())}, {float(snr.max())}] dB")
     for label, name in enumerate(OUTPUT_MOD_NAMES):
         print(f"label {label}: {name:<5} count={int(np.sum(y == label))}")
 
@@ -203,6 +220,14 @@ def main() -> None:
     assert snr.shape == (x.shape[0],)
     assert len(np.unique(y)) == len(OUTPUT_MOD_NAMES)
     assert np.isfinite(x).all()
+    if args.make_views:
+        assert save_data["x_noisy_a"].shape == x.shape
+        assert save_data["x_noisy_b"].shape == x.shape
+        assert np.isfinite(save_data["x_noisy_a"]).all()
+        assert np.isfinite(save_data["x_noisy_b"]).all()
+        if args.view_mode == "identity":
+            assert np.array_equal(save_data["x_noisy_a"], x)
+            assert np.array_equal(save_data["x_noisy_b"], x)
     print("\nPASS: RadioML conversion completed.")
 
 
